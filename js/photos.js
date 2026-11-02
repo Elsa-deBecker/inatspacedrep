@@ -11,7 +11,8 @@ const Photos = (() => {
   const TTL_MS = 30 * 86400000;  // refresh pools monthly
   const LOW_THRESHOLD = 10;
 
-  const key = (taxonId, multi) => `pool.${taxonId}.${multi ? 'm' : 's'}`;
+  // "pool2": items now carry location data; older "pool." caches are ignored and refetched.
+  const key = (taxonId, multi) => `pool2.${taxonId}.${multi ? 'm' : 's'}`;
 
   function load(taxonId, multi) {
     const p = Store.getCache(key(taxonId, multi));
@@ -35,11 +36,22 @@ const Photos = (() => {
       t: obs.taxon ? obs.taxon.id : null,
       n: obs.taxon ? obs.taxon.name : null,
       c: obs.taxon ? (obs.taxon.preferred_common_name || null) : null,
+      g: obs.location || null,                 // "lat,lng" (public; may be obscured)
+      x: obs.obscured ? 1 : 0,
+      r: obs.public_positional_accuracy || null, // meters
+      p: obs.place_ids || [],
     };
   }
 
-  const expand = i => ({ obsId: i.o, url: i.u, license: i.l, attribution: i.a, observedOn: i.d,
-    taxon: i.t ? { id: i.t, name: i.n, commonName: i.c } : null });
+  function expand(i) {
+    let lat = null, lng = null;
+    if (i.g) [lat, lng] = i.g.split(',').map(Number);
+    return {
+      obsId: i.o, url: i.u, license: i.l, attribution: i.a, observedOn: i.d,
+      taxon: i.t ? { id: i.t, name: i.n, commonName: i.c } : null,
+      lat, lng, obscured: !!i.x, accuracy: i.r, placeIds: i.p || [],
+    };
+  }
 
   /** obsId → last time it was shown for this taxon (any deck). */
   function seenMap(taxonId) {
@@ -143,7 +155,30 @@ const Photos = (() => {
     return { photo: all.length ? expand(all[0]) : null, repeat: all.length > 0, info: info(p) };
   }
 
-  function preload(url) { const img = new Image(); img.src = url; }
+  /** A specific observation's photo (e.g. to re-show one you missed). Null if unavailable/blocked. */
+  async function byObs(taxonId, obsId) {
+    if (Store.isBlocked(obsId)) return null;
+    for (const multi of [false, true]) {
+      const p = Store.getCache(key(taxonId, multi));
+      if (p && p.items[obsId]) return expand(p.items[obsId]);
+    }
+    const obs = await INat.observation(obsId);
+    const it = obs && extract(obs, true);
+    return it ? expand(it) : null;
+  }
 
-  return { next, warm, cachedInfo, preload, LOW_THRESHOLD };
+  /** Start downloading an image; resolves when loaded (or failed). */
+  const imageCache = new Map();
+  function preload(url) {
+    if (imageCache.has(url)) return imageCache.get(url).promise;
+    const img = new Image();
+    const promise = new Promise(res => { img.onload = () => res(true); img.onerror = () => res(false); });
+    img.src = url;
+    imageCache.set(url, { img, promise });
+    if (imageCache.size > 30) imageCache.delete(imageCache.keys().next().value);
+    return promise;
+  }
+  const isLoaded = url => { const e = imageCache.get(url); return !!(e && e.img.complete && e.img.naturalWidth); };
+
+  return { next, warm, byObs, cachedInfo, preload, isLoaded, LOW_THRESHOLD };
 })();

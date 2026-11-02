@@ -182,6 +182,15 @@ function viewDeck(deckId) {
           <select id="mode">${ReviewModes.list().map(m =>
             `<option value="${m.id}" ${m.id === deck.mode ? 'selected' : ''}>${esc(m.label)}</option>`).join('')}</select></label>
         <label>New cards / day <input id="newPerDay" type="number" min="0" max="999" value="${deck.newPerDay}"></label>
+        <label>Card order
+          <select id="order">
+            <option value="random" ${deck.order !== 'added' ? 'selected' : ''}>Random</option>
+            <option value="added" ${deck.order === 'added' ? 'selected' : ''}>As added</option>
+          </select></label>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="showMap" ${deck.showMap !== false ? 'checked' : ''}>
+          Show where the photo was taken (map) before revealing the answer</label>
       </div>
     </section>
 
@@ -235,6 +244,8 @@ function viewDeck(deckId) {
   // --- settings ---
   $('#deckName').onchange = e => Store.updateDeck(deckId, { name: e.target.value.trim() || deck.name });
   $('#mode').onchange = e => Store.updateDeck(deckId, { mode: e.target.value });
+  $('#order').onchange = e => Store.updateDeck(deckId, { order: e.target.value });
+  $('#showMap').onchange = e => Store.updateDeck(deckId, { showMap: e.target.checked });
   $('#newPerDay').onchange = e => Store.updateDeck(deckId, { newPerDay: Math.max(0, parseInt(e.target.value, 10) || 0) });
   $('#deleteDeck').onclick = e => {
     if (e.target.dataset.armed) { Store.deleteDeck(deckId); location.hash = '#/'; return; }
@@ -436,10 +447,13 @@ function viewStudy(deckId) {
   const deck = Store.getDeck(deckId);
   if (!deck) { location.hash = '#/'; return; }
   const mode = ReviewModes.get(deck.mode);
+  const showMap = deck.showMap !== false;
   const skip = new Set();
-  let cur = null;   // { card, taxon, photo, info, repeat, revealed, revealedAt, suggested }
-  let token = 0;    // guards against stale async loads
+  let cur = null;      // { card, taxon, photo, info, repeat, sameAsMissed, revealed, revealedAt, suggested }
+  let pending = null;  // { taxonId, promise } — the likely next card, prepared in the background
+  let token = 0;       // guards against stale async loads
   let reviewed = 0;
+  let mapCleanups = [];
 
   app.innerHTML = `
     <div class="study">
@@ -450,6 +464,12 @@ function viewStudy(deckId) {
       <div id="stage"></div>
     </div>`;
   const stage = $('#stage');
+  const LOADING = '<div class="loading">Finding a photo…</div>';
+
+  function clearMaps() {
+    for (const f of mapCleanups) { try { f(); } catch { /* ignore */ } }
+    mapCleanups = [];
+  }
 
   function updateCounts() {
     const s = Scheduler.summary(deckId);
@@ -457,59 +477,103 @@ function viewStudy(deckId) {
       (s.soon.length ? ` · ${s.soon.length} learning` : '') + ` · ${reviewed} done`;
   }
 
-  async function loadNext(avoid = null) {
-    const my = ++token;
-    updateCounts();
-    const card = Scheduler.nextCard(deckId, { avoid, skip });
-    if (!card) return renderDone();
-    stage.innerHTML = '<div class="loading">Finding a photo…</div>';
-    try {
-      await ensureTaxa([card.taxonId]);
-      const taxon = Store.getTaxon(card.taxonId);
-      const res = await Photos.next(card.taxonId, { multi: !!card.allowMultiPhoto });
-      if (my !== token) return;
-      if (!res.photo) return renderNoPhoto(card, taxon, res.info);
-      cur = { card, taxon, photo: res.photo, info: res.info, repeat: res.repeat, revealed: false };
-      renderCard();
-      warmUpcoming(card.taxonId);
-    } catch (e) {
-      if (my !== token) return;
-      stage.innerHTML = `<div class="panel"><p>Couldn't load from iNaturalist: ${esc(e.message)}</p>
-        <button class="primary" id="retry">Retry</button></div>`;
-      $('#retry').onclick = () => loadNext(avoid);
+  const freshCard = c => Store.deckCards(deckId).find(x => x.taxonId === c.taxonId) || c;
+
+  /**
+   * Everything needed to show a card: taxon, a photo (download started), and map data.
+   * If the last review of this card was "Again", the same photo is shown again.
+   */
+  async function prepare(card) {
+    await ensureTaxa([card.taxonId]);
+    const taxon = Store.getTaxon(card.taxonId);
+    let photo = null, info = null, repeat = false, sameAsMissed = false;
+    const last = Scheduler.lastReview(deckId, card.taxonId);
+    if (last && last.grade === 1 && last.obsId) {
+      try { photo = await Photos.byObs(card.taxonId, last.obsId); } catch { photo = null; }
+      if (photo) { sameAsMissed = true; info = Photos.cachedInfo(card.taxonId, !!card.allowMultiPhoto); }
     }
+    if (!photo) ({ photo, info, repeat } = await Photos.next(card.taxonId, { multi: !!card.allowMultiPhoto }));
+    if (photo) {
+      Photos.preload(photo.url);
+      Maps.prefetch(card.taxonId, photo, showMap); // fire and forget
+    }
+    return { card, taxon, photo, info, repeat, sameAsMissed };
   }
 
-  /** Pre-fetch photo pools for the next couple of likely cards, in the background. */
-  function warmUpcoming(currentId) {
-    const s = Scheduler.summary(deckId);
-    const upcoming = [...s.due, ...s.fresh.slice(0, s.newLeft)]
-      .filter(c => c.taxonId !== currentId && !skip.has(c.taxonId)).slice(0, 2);
-    (async () => {
-      for (const c of upcoming) {
-        try { await ensureTaxa([c.taxonId]); await Photos.warm(c.taxonId, !!c.allowMultiPhoto); } catch { /* ignore */ }
+  /** Predict the next card and prepare it while the user looks at the current one. */
+  function prepareNext() {
+    if (!cur) return;
+    const next = Scheduler.nextCard(deckId, { avoid: cur.card.taxonId, skip });
+    if (!next || next.taxonId === cur.card.taxonId) { pending = null; return; }
+    const promise = prepare(next).catch(() => null);
+    pending = { taxonId: next.taxonId, promise };
+    // Then warm the photo pool of the card after that, so it's quick too.
+    promise.then(() => {
+      const s = Scheduler.summary(deckId);
+      const after = [...s.due, ...s.fresh.slice(0, s.newLeft)]
+        .find(c => c.taxonId !== next.taxonId && c.taxonId !== cur?.card.taxonId && !skip.has(c.taxonId));
+      if (after) ensureTaxa([after.taxonId]).then(() => Photos.warm(after.taxonId, !!after.allowMultiPhoto)).catch(() => {});
+    });
+  }
+
+  async function loadNext(avoid = null) {
+    const my = ++token;
+    clearMaps();
+    updateCounts();
+    stage.onclick = null;
+    let prepared = null;
+    const p = pending;
+    pending = null;
+    if (p && p.taxonId !== avoid && Scheduler.isAvailable(deckId, p.taxonId, { skip })) {
+      stage.innerHTML = LOADING; // only visible if preparation hasn't finished yet
+      prepared = await p.promise;
+      if (my !== token) return;
+    }
+    if (!prepared) {
+      const card = Scheduler.nextCard(deckId, { avoid, skip });
+      if (!card) return renderDone();
+      stage.innerHTML = LOADING;
+      try { prepared = await prepare(card); }
+      catch (e) {
+        if (my !== token) return;
+        stage.innerHTML = `<div class="panel"><p>Couldn't load from iNaturalist: ${esc(e.message)}</p>
+          <button class="primary" id="retry">Retry</button></div>`;
+        $('#retry').onclick = () => loadNext(avoid);
+        return;
       }
-    })();
+      if (my !== token) return;
+    }
+    prepared.card = freshCard(prepared.card);
+    if (!prepared.photo) return renderNoPhoto(prepared.card, prepared.taxon, prepared.info);
+    cur = Object.assign(prepared, { revealed: false });
+    renderCard();
+    prepareNext();
   }
 
   function renderCard() {
-    const { photo, info, card } = cur;
+    clearMaps();
     stage.onclick = null;
+    const { photo, info, card } = cur;
+    const withMap = showMap && photo.lat != null && Maps.available();
     const warnings = [];
     if (info && info.low && !card.allowMultiPhoto) {
       warnings.push(`<div class="warn" id="lowWarn">Only ${info.complete ? '' : 'about '}${info.estimate} eligible
         single-photo observation${info.estimate === 1 ? '' : 's'} exist for this taxon, so you'll see repeats.
         <button data-act="broaden">Include multi-photo observations</button></div>`);
     }
-    if (cur.repeat) warnings.push(`<div class="note">You've seen every available photo of this taxon; this one is a repeat.</div>`);
+    if (cur.sameAsMissed) warnings.push(`<div class="note">Same photo as last time, since you missed it.</div>`);
+    else if (cur.repeat) warnings.push(`<div class="note">You've seen every available photo of this taxon; this one is a repeat.</div>`);
 
     stage.innerHTML = `
       <figure class="photo">
-        <div class="photo-box"><img id="photo" src="${esc(photo.url)}" alt="Photo to identify"></div>
+        <div class="photo-box"><img id="photo" alt="Photo to identify"></div>
         <figcaption class="attrib">Photo ${esc(photo.attribution)} · via iNaturalist</figcaption>
       </figure>
       ${warnings.join('')}
-      <div id="prompt" class="prompt"></div>
+      <div class="qrow ${withMap ? 'with-map' : ''}">
+        ${withMap ? '<div class="qmap-wrap"><div id="qmap" class="qmap"></div><div class="map-caption muted small"></div></div>' : ''}
+        <div id="prompt" class="prompt"></div>
+      </div>
       <div id="answer" class="answer" hidden></div>
       <div class="tools">
         <button class="small" data-act="badphoto" title="Hide this observation forever (e.g. photo is unclear, shows a label, wrong subject)">Bad photo, never show again</button>
@@ -518,7 +582,15 @@ function viewStudy(deckId) {
 
     const img = $('#photo');
     img.onerror = () => { Store.blockObservation(photo.obsId); loadSameCard(); };
+    if (Photos.isLoaded(photo.url)) {
+      img.src = photo.url;
+    } else {
+      // Not downloaded yet: show the smaller version immediately, swap in the large one when ready.
+      img.src = photo.url.replace('/large.', '/medium.');
+      Photos.preload(photo.url).then(ok => { if (ok && img.isConnected) img.src = photo.url; });
+    }
 
+    if (withMap) mapCleanups.push(Maps.questionMap($('#qmap'), photo));
     mode.mount($('#prompt'), modeCtx());
   }
 
@@ -528,15 +600,16 @@ function viewStudy(deckId) {
 
   function loadSameCard() {
     // Fetch a different photo for the current card (e.g. after flagging a bad one).
-    skip.delete(cur.card.taxonId);
     const card = cur.card;
     const my = ++token;
+    clearMaps();
     stage.innerHTML = '<div class="loading">Finding another photo…</div>';
     Photos.next(card.taxonId, { multi: !!card.allowMultiPhoto, exclude: new Set([cur.photo.obsId]) })
       .then(res => {
         if (my !== token) return;
         if (!res.photo) return renderNoPhoto(card, cur.taxon, res.info);
-        Object.assign(cur, { photo: res.photo, info: res.info, repeat: res.repeat, revealed: false });
+        Photos.preload(res.photo.url);
+        Object.assign(cur, { photo: res.photo, info: res.info, repeat: res.repeat, sameAsMissed: false, revealed: false });
         renderCard();
       })
       .catch(e => { if (my === token) stage.innerHTML = `<div class="panel">${esc(e.message)}</div>`; });
@@ -567,7 +640,10 @@ function viewStudy(deckId) {
       </div>
       <div class="grades">${labels.map((l, i) => `
         <button class="grade g${i + 1} ${suggested === i + 1 ? 'suggested' : ''}" data-grade="${i + 1}">
-          <span>${l}</span><small>${previews[i]}</small><kbd>${i + 1}</kbd></button>`).join('')}</div>`;
+          <span>${l}</span><small>${previews[i]}</small><kbd>${i + 1}</kbd></button>`).join('')}</div>
+      ${Maps.available() ? `<div class="amap-wrap"><div id="amap" class="amap"></div>
+        <div class="map-legend small muted"></div></div>` : ''}`;
+    if (Maps.available()) mapCleanups.push(Maps.answerMap($('#amap'), t, photo));
     const focusBtn = $(`.grade[data-grade="${suggested || 3}"]`, ans);
     if (focusBtn) focusBtn.focus({ preventScroll: true });
     $('.grades', ans).scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -584,6 +660,7 @@ function viewStudy(deckId) {
 
   function renderNoPhoto(card, taxon, info) {
     cur = null;
+    clearMaps();
     stage.innerHTML = `<div class="panel">
       <p>No eligible photos found for ${taxon ? nameHtml(taxon) : 'this taxon'}
         ${card.allowMultiPhoto ? '' : 'among research-grade, single-photo observations with a CC0/CC BY/CC BY-NC license'}.</p>
@@ -594,14 +671,18 @@ function viewStudy(deckId) {
       </div></div>`;
     stage.onclick = e => {
       const act = e.target.dataset.act;
-      if (act === 'broaden-now') { Store.updateCard(deckId, card.taxonId, { allowMultiPhoto: true }); stage.onclick = null; loadNext(); }
-      if (act === 'skip-now') { skip.add(card.taxonId); stage.onclick = null; loadNext(); }
-      if (act === 'remove-now') { Store.removeCard(deckId, card.taxonId); stage.onclick = null; loadNext(); }
+      if (act === 'broaden-now') Store.updateCard(deckId, card.taxonId, { allowMultiPhoto: true });
+      else if (act === 'skip-now') skip.add(card.taxonId);
+      else if (act === 'remove-now') Store.removeCard(deckId, card.taxonId);
+      else return;
+      stage.onclick = null;
+      loadNext();
     };
   }
 
   function renderDone() {
     cur = null;
+    clearMaps();
     const st = Scheduler.states(deckId);
     const s = Scheduler.summary(deckId);
     let nextDue = Infinity;
@@ -656,7 +737,7 @@ function viewStudy(deckId) {
     else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); grade(cur.suggested || 3); }
   }
   document.addEventListener('keydown', onKey);
-  viewCleanup = () => { document.removeEventListener('keydown', onKey); token++; };
+  viewCleanup = () => { document.removeEventListener('keydown', onKey); token++; clearMaps(); };
 
   loadNext();
 }

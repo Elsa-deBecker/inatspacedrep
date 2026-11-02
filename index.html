@@ -4,15 +4,20 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>iNat Spaced Repetition</title>
+  <link rel="preconnect" href="https://inaturalist-open-data.s3.amazonaws.com">
+  <link rel="preconnect" href="https://api.inaturalist.org">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
   <main id="app"></main>
   <!-- Plain scripts (no modules) so the app works when opened straight from disk. Order matters. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   <script src="js/storage.js"></script>
   <script src="js/fsrs.js"></script>
   <script src="js/inat.js"></script>
   <script src="js/photos.js"></script>
+  <script src="js/maps.js"></script>
   <script src="js/scheduler.js"></script>
   <script src="js/match.js"></script>
   <script src="js/modes.js"></script>

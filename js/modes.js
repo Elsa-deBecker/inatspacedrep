@@ -36,7 +36,7 @@ ReviewModes.register('typed', {
   mount(el, ctx) {
     el.innerHTML = `
       <form class="typed" autocomplete="off">
-        <input type="text" name="answer" placeholder="Scientific or common name…" spellcheck="false" autocapitalize="off">
+        <input type="text" name="answer" placeholder="Scientific (or G. species) or common name…" spellcheck="false" autocapitalize="off">
         <button class="primary" type="submit">Check</button>
         <button type="button" data-act="idk">Don't know</button>
       </form>`;
@@ -46,9 +46,10 @@ ReviewModes.register('typed', {
     form.onsubmit = e => {
       e.preventDefault();
       const t = ctx.taxon;
-      const obsNames = ctx.photo.taxon && ctx.photo.taxon.id !== t.id
-        ? [ctx.photo.taxon.name, ctx.photo.taxon.commonName] : [];
-      const r = Match.check(input.value, t.names || [t.name, t.commonName], obsNames);
+      const obsT = ctx.photo.taxon && ctx.photo.taxon.id !== t.id ? ctx.photo.taxon : null;
+      const obsNames = obsT ? [obsT.name, obsT.commonName] : [];
+      const r = Match.check(input.value, t.names || [t.name, t.commonName], obsNames,
+        t.sciNames || [t.name], obsT ? [obsT.name] : []);
       if (r.result === 'empty') { input.focus(); return; }
       input.disabled = true;
       const you = `You typed: <b>${ctx.escape(input.value)}</b>`;

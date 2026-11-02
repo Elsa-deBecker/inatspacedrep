@@ -131,3 +131,26 @@ table.list { width: 100%; border-collapse: collapse; }
 .tools { display: flex; justify-content: center; gap: 8px; margin-top: 18px; flex-wrap: wrap; opacity: .8; }
 .loading { text-align: center; padding: 80px 0; color: var(--muted); }
 .done { text-align: center; padding: 32px 16px; }
+
+/* ---- maps ---- */
+.qrow { display: flex; justify-content: center; align-items: center; gap: 16px; margin: 14px 0; }
+.qrow .prompt { margin: 0; flex: 1; }
+.qrow.with-map .prompt { justify-content: flex-start; }
+.qmap-wrap { flex: 0 0 280px; }
+.qmap { height: 200px; border-radius: 8px; border: 1px solid var(--line); }
+.map-caption { text-align: center; margin-top: 2px; min-height: 1.2em; }
+@media (max-width: 640px) {
+  .qrow { flex-direction: column; align-items: stretch; }
+  .qmap-wrap { flex: none; }
+  .qrow.with-map .prompt { justify-content: center; }
+}
+.amap-wrap { max-width: 720px; margin: 18px auto 0; }
+.amap { height: 320px; border-radius: 8px; border: 1px solid var(--line); }
+.map-legend { margin-top: 4px; }
+.key { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -1px; margin-left: 8px; }
+.key.grid { background: #f16f3a; }
+.key.range { background: #ff5eb0; opacity: .7; }
+.key.here { background: var(--due); border-radius: 50%; }
+.leaflet-container { background: var(--bg); font: inherit; }
+.leaflet-control-attribution { font-size: 9px !important; line-height: 1.3; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.leaflet-control-attribution:hover { white-space: normal; }

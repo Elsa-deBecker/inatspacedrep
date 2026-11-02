@@ -56,7 +56,8 @@ const Store = (() => {
 
   function createDeck(name) {
     const now = Date.now();
-    const deck = { id: uuid(), name, mode: 'self', newPerDay: 20, createdAt: now, updatedAt: now, cards: {} };
+    const deck = { id: uuid(), name, mode: 'self', newPerDay: 20, showMap: true, order: 'random',
+      createdAt: now, updatedAt: now, cards: {} };
     data.decks[deck.id] = deck;
     save();
     return deck;
@@ -133,12 +134,14 @@ const Store = (() => {
       try { localStorage.setItem(CACHE_PREFIX + key, JSON.stringify(value)); } catch { /* give up quietly */ }
     }
   }
-  function clearPhotoCaches() {
+  function clearPhotoCaches(prefix = '') {
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const k = localStorage.key(i);
-      if (k && k.startsWith(CACHE_PREFIX)) localStorage.removeItem(k);
+      if (k && k.startsWith(CACHE_PREFIX + prefix)) localStorage.removeItem(k);
     }
   }
+  // Drop pools in the old (pre-location) format.
+  try { clearPhotoCaches('pool.'); } catch { /* ignore */ }
 
   // ---------- export / import / merge ----------
   function exportJSON() {

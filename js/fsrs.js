@@ -8,7 +8,8 @@ const FSRS = (() => {
   const DECAY = -0.5;
   const FACTOR = 19 / 81;
   const DAY = 86400000;
-  const RELEARN_MS = 10 * 60 * 1000;  // "Again" → see it again in 10 minutes
+  const LEARN_AGAIN_MS = 60 * 1000;      // "Again" on a card you've never gotten right → 1 minute
+  const RELEARN_AGAIN_MS = 5 * 60 * 1000; // "Again" on a card you'd learned (a lapse) → 5 minutes
   const DAY_ROLLOVER_HOURS = 4;        // like Anki: a new "day" starts at 4am
   const MAX_IVL_DAYS = 36500;
 
@@ -54,8 +55,9 @@ const FSRS = (() => {
     }
     s = Math.max(0.01, s);
     let due, ivlDays;
+    const wasGraduated = !!(state && state.graduated);
     if (grade === 1) {
-      due = now + RELEARN_MS;
+      due = now + (wasGraduated ? RELEARN_AGAIN_MS : LEARN_AGAIN_MS);
       ivlDays = 0;
     } else {
       ivlDays = Math.min(MAX_IVL_DAYS, Math.max(1, Math.round(intervalDays(s, retention))));
@@ -64,7 +66,8 @@ const FSRS = (() => {
     return {
       s, d, last: now, due, ivlDays,
       reps: (state ? state.reps : 0) + 1,
-      lapses: (state ? state.lapses : 0) + (grade === 1 && state ? 1 : 0),
+      lapses: (state ? state.lapses : 0) + (grade === 1 && wasGraduated ? 1 : 0),
+      graduated: wasGraduated || grade > 1,
       phase: grade === 1 ? 'learning' : 'review',
     };
   }

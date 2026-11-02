@@ -71,6 +71,7 @@ const INat = (() => {
       .filter(n => n.locale === 'sci' || n.locale === loc)
       .map(n => n.name);
     if (!names.includes(t.name)) names.unshift(t.name);
+    const sciNames = [t.name, ...(t.names || []).filter(n => n.locale === 'sci' && n.name !== t.name).map(n => n.name)];
     if (t.preferred_common_name && !names.includes(t.preferred_common_name)) names.push(t.preferred_common_name);
     const anc = {};
     for (const a of t.ancestors || []) anc[a.rank] = a.name;
@@ -80,13 +81,29 @@ const INat = (() => {
       iconic: t.iconic_taxon_name || null,
       family: anc.family || null, order: anc.order || null,
       thumb: t.default_photo ? t.default_photo.square_url : null,
-      names, fetchedAt: Date.now(),
+      names, sciNames, fetchedAt: Date.now(),
     };
+  }
+
+  /** Lat/lng bounding box of all verifiable observations of a taxon (for the answer map). */
+  async function taxonBounds(taxonId) {
+    const d = await get(`${V1}/observations?${qs({ taxon_id: taxonId, verifiable: true, return_bounds: true, per_page: 0 })}`);
+    return d.total_bounds || null;
   }
 
   // ---------- places ----------
   const autocompletePlaces = q =>
     get(`${V1}/places/autocomplete?${qs({ q, per_page: 10 })}`).then(d => d.results);
+
+  /** Of the given place ids, the standard places at an admin level (0 = country, 10 = state/province). */
+  async function placesAtLevel(ids, adminLevel) {
+    const out = [];
+    for (let i = 0; i < ids.length; i += 100) {
+      const d = await get(`${V1}/places/${ids.slice(i, i + 100).join(',')}?${qs({ admin_level: adminLevel })}`);
+      out.push(...d.results);
+    }
+    return out;
+  }
 
   // ---------- deck generation ----------
   async function speciesCounts({ taxonId, placeId, count }) {
@@ -99,6 +116,7 @@ const INat = (() => {
 
   // ---------- observations (photo pools) ----------
   const OBS_FIELDS = '(id:!t,observed_on:!t,place_guess:!t,user:(login:!t,name:!t),' +
+    'location:!t,obscured:!t,public_positional_accuracy:!t,place_ids:!t,' +
     'photos:(id:!t,url:!t,license_code:!t,attribution:!t),' +
     'taxon:(id:!t,name:!t,rank:!t,preferred_common_name:!t))';
 
@@ -116,6 +134,12 @@ const INat = (() => {
     }, extra))}`);
   }
 
-  return { autocompleteTaxa, searchTaxa, fetchTaxa, autocompletePlaces, speciesCounts,
-    observations, ALLOWED_LICENSES };
+  /** A single observation by id (same fields as pool fetches), or null. */
+  async function observation(id) {
+    const d = await get(`${V2}/observations?${qs({ id, fields: OBS_FIELDS, locale: locale() })}`);
+    return d.results[0] || null;
+  }
+
+  return { autocompleteTaxa, searchTaxa, fetchTaxa, taxonBounds, autocompletePlaces, placesAtLevel,
+    speciesCounts, observations, observation, ALLOWED_LICENSES };
 })();

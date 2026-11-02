@@ -30,7 +30,28 @@ const Match = (() => {
    * observation's own, possibly more specific, taxon).
    * Returns { result: 'exact'|'close'|'specific'|'wrong'|'empty', matched }.
    */
-  function check(answer, names, obsNames = []) {
+  /**
+   * "G. species" style: if the answer starts with a single letter, compare it against the genus
+   * initial (must match exactly) and the rest of the name (typo-tolerant).
+   * Returns 0 (exact), a positive distance within tolerance, or -1 (no match).
+   */
+  function abbrevDistance(a, sciName) {
+    const m = a.match(/^([a-z]) (.+)$/);
+    if (!m) return -1;
+    const toks = normalize(sciName).split(' ');
+    if (toks.length < 2 || toks[0][0] !== m[1]) return -1;
+    const rest = toks.slice(1).join(' ');
+    const d = levenshtein(m[2], rest);
+    return d <= tolerance(rest.length) ? d : -1;
+  }
+
+  /**
+   * Compare an answer against the card's accepted names (and optionally the names of the
+   * observation's own, possibly more specific, taxon).
+   * sciNames: scientific names, which also accept the "G. species" abbreviation.
+   * Returns { result: 'exact'|'close'|'specific'|'wrong'|'empty', matched }.
+   */
+  function check(answer, names, obsNames = [], sciNames = [], obsSciNames = []) {
     const a = normalize(answer);
     if (!a) return { result: 'empty' };
     let best = null;
@@ -41,9 +62,17 @@ const Match = (() => {
       const d = levenshtein(a, nn);
       if (d <= tolerance(nn.length) && (!best || d < best.d)) best = { d, n };
     }
+    for (const n of sciNames) {
+      const d = abbrevDistance(a, n);
+      if (d === 0) return { result: 'exact', matched: n };
+      if (d > 0 && (!best || d < best.d)) best = { d, n };
+    }
     if (best) return { result: 'close', matched: best.n };
     for (const n of obsNames) {
       if (n && normalize(n) === a) return { result: 'specific', matched: n };
+    }
+    for (const n of obsSciNames) {
+      if (n && abbrevDistance(a, n) === 0) return { result: 'specific', matched: n };
     }
     return { result: 'wrong' };
   }

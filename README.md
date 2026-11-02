@@ -8,7 +8,7 @@ photo, licensed CC0, CC BY, or CC BY-NC. Because you never see the same photo tw
 ## Running it
 
 Double-click `index.html`. It runs entirely in your browser with no install, build step, or
-server. Data is saved in the browser's local storage, so use the same browser each time,
+server. It needs an internet connection: Leaflet loads from cdnjs, and map tiles come from Esri and iNat. Data is saved in the browser's local storage, so use the same browser each time,
 and use **Export** on the home screen for backups.
 
 ## Features
@@ -20,9 +20,16 @@ and use **Export** on the home screen for backups.
   - Generate from iNat: the top *N* most-observed species within a taxon, optionally limited to a place.
 - **Two review modes**, set per deck:
   - Recall, then self-grade: Space to reveal, 1–4 to grade.
-  - Type the name: scientific or common name, typo-tolerant, with a suggested grade you can override.
+  - Type the name: scientific (`Genus species` or `G. species`) or common name, typo-tolerant, with a suggested grade you can override.
   - If a card is a genus and you type the observation's exact species, it counts as correct.
-- **Scheduling uses FSRS-4.5** (the algorithm modern Anki uses), with 90% target retention, an Anki-style 4am day boundary, a configurable new-cards-per-day limit, and "Again" bringing the card back in 10 minutes.
+- **Scheduling uses FSRS-4.5** (the algorithm modern Anki uses), with 90% target retention, an Anki-style 4am day boundary, and a configurable new-cards-per-day limit.
+  - "Again" on a card you've never gotten right brings it back in 1 minute; on a card you'd learned, in 5 minutes.
+  - After an "Again", the card comes back with **the same photo**. Once you get it right, it goes back to fresh photos.
+  - Cards come in **random order** (reshuffled daily), or "as added" (a per-deck setting).
+- **Maps:**
+  - Question side: where the photo was taken, shown within its state or province (country as fallback). Obscured locations appear as a dashed circle. This can be turned off per deck.
+  - Answer side: the taxon's whole distribution (iNat's observation grid), plus iNat's range map when one exists.
+- **Fast card changes:** the next card (taxon, photo, map data) is prepared and its image downloaded while you're still looking at the current one.
 - **Photo supply warnings:** if a taxon has fewer than 10 eligible single-photo observations, you get a warning with a one-click option to include multi-photo observations for that card. The first photo with an allowed license is used. **Check photo supply** on the deck page checks every card in advance.
 - **"Bad photo, never show again"** hides an observation permanently, e.g. a blurry shot, a specimen label, or the wrong subject.
 - **Attribution** is shown on every photo, with links to the observation and taxon after you reveal the answer.
@@ -35,7 +42,8 @@ and use **Export** on the home screen for backups.
 | `js/fsrs.js` | FSRS scheduler (pure functions). |
 | `js/scheduler.js` | Replays the review log into card states and picks the next card. |
 | `js/inat.js` | iNat API client, throttled to about 1 request/sec as iNat requests. |
-| `js/photos.js` | Per-taxon photo pools: sampling, caching, and choosing unseen observations. |
+| `js/photos.js` | Per-taxon photo pools: sampling, caching, choosing unseen observations, image preloading. |
+| `js/maps.js` | Leaflet maps: observation location (question) and taxon distribution and range (answer). |
 | `js/modes.js` | Review-mode plugins (`self`, `typed`). |
 | `js/match.js` | Fuzzy name matching. |
 | `js/app.js` | UI (hash router: `#/`, `#/deck/:id`, `#/study/:id`). |

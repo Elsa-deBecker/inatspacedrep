@@ -4,7 +4,7 @@
 const Scheduler = (() => {
   const LEARN_AHEAD_MS = 20 * 60 * 1000;
 
-  /** taxonId → FSRS state (plus firstTs), replayed from the deck's review log. */
+  /** taxonId → FSRS state (plus firstTs, lastReview), replayed from the deck's review log. */
   function states(deckId) {
     const map = new Map();
     const revs = Store.reviewsFor(deckId).slice().sort((a, b) => a.ts - b.ts);
@@ -12,30 +12,49 @@ const Scheduler = (() => {
       const prev = map.get(r.taxonId) || null;
       const next = FSRS.review(prev, r.grade, r.ts);
       next.firstTs = prev ? prev.firstTs : r.ts;
+      next.lastReview = r;
       map.set(r.taxonId, next);
     }
     return map;
   }
 
+  /** Deterministic pseudo-random rank: shuffles cards differently each day, but stably within a day. */
+  function dailyRank(taxonId, day) {
+    let h = (taxonId * 2654435761 ^ Math.floor(day / 3600000)) >>> 0;
+    h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+    h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+    return (h ^ (h >>> 16)) >>> 0;
+  }
+
   function summary(deckId, now = Date.now()) {
     const deck = Store.getDeck(deckId);
-    const cards = Store.deckCards(deckId).sort((a, b) => a.addedAt - b.addedAt || a.taxonId - b.taxonId);
-    const st = states(deckId);
+    const random = !deck || deck.order !== 'added';
     const today = FSRS.dayStart(now);
+    const rank = c => dailyRank(c.taxonId, today);
+    const cards = Store.deckCards(deckId);
+    const st = states(deckId);
     let introducedToday = 0;
     for (const s of st.values()) if (s.firstTs >= today) introducedToday++;
 
-    const due = [], soon = [], fresh = [];
+    const learning = [], due = [], soon = [], fresh = [];
     for (const c of cards) {
       const s = st.get(c.taxonId);
       if (!s) fresh.push(c);
-      else if (s.due <= now) due.push(Object.assign({ state: s }, c));
+      else if (s.due <= now) (s.phase === 'learning' ? learning : due).push(Object.assign({ state: s }, c));
       else if (s.phase === 'learning' && s.due <= now + LEARN_AHEAD_MS) soon.push(Object.assign({ state: s }, c));
     }
-    due.sort((a, b) => a.state.due - b.state.due);
+    learning.sort((a, b) => a.state.due - b.state.due);
     soon.sort((a, b) => a.state.due - b.state.due);
+    if (random) {
+      due.sort((a, b) => rank(a) - rank(b));
+      fresh.sort((a, b) => rank(a) - rank(b));
+    } else {
+      due.sort((a, b) => a.state.due - b.state.due);
+      fresh.sort((a, b) => a.addedAt - b.addedAt || a.taxonId - b.taxonId);
+    }
     const newLeft = Math.min(fresh.length, Math.max(0, (deck ? deck.newPerDay : 20) - introducedToday));
-    return { due, soon, fresh, newLeft, states: st, total: cards.length };
+    // `due` in the returned summary includes learning cards (they come first).
+    return { due: [...learning, ...due], learning, reviews: due, soon, fresh, newLeft, states: st, total: cards.length };
   }
 
   /**
@@ -43,25 +62,53 @@ const Scheduler = (() => {
    * avoid: taxonId just shown (not repeated back-to-back if there's an alternative).
    * skip: Set of taxonIds to leave out for this session.
    */
-  function nextCard(deckId, { avoid: avoidTaxonId = null, skip = new Set() } = {}, now = Date.now()) {
+  function nextCard(deckId, { avoid = null, skip = new Set() } = {}, now = Date.now()) {
     const s = summary(deckId, now);
     const keep = c => !skip.has(c.taxonId);
-    s.due = s.due.filter(keep); s.soon = s.soon.filter(keep);
+    const learning = s.learning.filter(keep);
+    const reviews = s.reviews.filter(keep);
+    const soon = s.soon.filter(keep);
     const freshAvail = s.fresh.filter(keep).slice(0, s.newLeft);
-    let lists;
-    if (s.due.length && freshAvail.length) {
+
+    // Failed cards that are due again come first.
+    const lists = [learning];
+    if (reviews.length && freshAvail.length) {
       // Mix new cards in among reviews proportionally.
-      const pNew = freshAvail.length / (freshAvail.length + s.due.length);
-      lists = Math.random() < pNew ? [freshAvail, s.due] : [s.due, freshAvail];
+      const pNew = freshAvail.length / (freshAvail.length + reviews.length);
+      lists.push(...(Math.random() < pNew ? [freshAvail, reviews] : [reviews, freshAvail]));
     } else {
-      lists = [s.due, freshAvail].filter(l => l.length);
+      lists.push(reviews, freshAvail);
     }
-    if (!lists.length && s.soon.length) lists = [s.soon];
-    for (const l of lists) {
-      const c = l.find(x => x.taxonId !== avoidTaxonId);
+    lists.push(soon);
+    const nonEmpty = lists.filter(l => l.length);
+    for (const l of nonEmpty) {
+      const c = l.find(x => x.taxonId !== avoid);
       if (c) return c;
     }
-    return lists.length ? lists[0][0] : null;
+    return nonEmpty.length ? nonEmpty[0][0] : null;
+  }
+
+  /**
+   * Is this card a legitimate thing to show right now? Used to decide whether a card that was
+   * prepared in advance can be shown. False if some *other* failed card is waiting, so those
+   * still take priority.
+   */
+  function isAvailable(deckId, taxonId, { skip = new Set() } = {}, now = Date.now()) {
+    if (skip.has(taxonId)) return false;
+    const s = summary(deckId, now);
+    const learning = s.learning.filter(c => !skip.has(c.taxonId));
+    if (learning.length && !learning.some(c => c.taxonId === taxonId)) return false;
+    if (s.due.some(c => c.taxonId === taxonId)) return true;
+    return s.fresh.filter(c => !skip.has(c.taxonId)).slice(0, s.newLeft).some(c => c.taxonId === taxonId);
+  }
+
+  /** The most recent review of a card in this deck, or null. */
+  function lastReview(deckId, taxonId) {
+    let last = null;
+    for (const r of Store.reviewsFor(deckId)) {
+      if (r.taxonId === taxonId && (!last || r.ts > last.ts)) last = r;
+    }
+    return last;
   }
 
   /** For each grade, a label of when the card would be due next. */
@@ -70,5 +117,5 @@ const Scheduler = (() => {
     return [1, 2, 3, 4].map(g => FSRS.formatDelay(FSRS.review(st, g, now).due, now));
   }
 
-  return { states, summary, nextCard, preview };
+  return { states, summary, nextCard, isAvailable, lastReview, preview };
 })();
