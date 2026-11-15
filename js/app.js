@@ -117,6 +117,7 @@ function viewHome() {
         <button class="primary">Create deck</button>
       </form>
     </section>
+    <section class="panel" id="syncPanel">${syncPanelHtml()}</section>
     <section class="panel">
       <h2>Data &amp; settings</h2>
       <p class="muted">Decks and review history are stored in this browser. Export to back up or to move to another
@@ -157,7 +158,68 @@ function viewHome() {
     } catch (err) { $('#dataMsg').textContent = 'Import failed: ' + err.message; }
   };
   $('#locale').onchange = e => Store.updateSettings({ locale: e.target.value.trim() || 'en' });
+  bindSyncPanel();
 }
+
+// ---------- sync panel (home) ----------
+const TOKEN_URL = 'https://github.com/settings/tokens/new?scopes=gist&description=iNat%20SRS%20sync';
+
+function agoText(ts) {
+  if (!ts) return 'never';
+  const s = Math.round((Date.now() - ts) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+function syncPanelHtml() {
+  const st = Sync.status();
+  if (!Sync.isConnected()) {
+    return `<h2>Sync between devices</h2>
+      <p class="muted">Keeps decks and reviews in sync between your devices, using a private GitHub Gist
+        as storage. <a href="${TOKEN_URL}" target="_blank" rel="noopener">Create a token</a> with only the
+        <b>gist</b> scope, then paste it here. Use the same token on each device.</p>
+      <form id="syncConnect" class="row">
+        <input name="token" type="password" placeholder="GitHub token (ghp_…)" autocomplete="off" required>
+        <button class="primary">Connect</button>
+      </form>`;
+  }
+  const line = st.state === 'syncing' ? 'Syncing…'
+    : st.state === 'error' ? `<span class="error">Sync failed: ${esc(st.msg)}</span>`
+    : `Last synced ${agoText(Sync.lastSync())}.`;
+  const gist = Sync.gistUrl();
+  return `<h2>Sync between devices</h2>
+    <p class="muted">Syncs automatically when you open the app, return to it, or about 20 s after a change.</p>
+    <div class="row">
+      <button id="syncNow" ${st.state === 'syncing' ? 'disabled' : ''}>Sync now</button>
+      <span class="muted small">${line}${gist ? ` · <a href="${gist}" target="_blank" rel="noopener">gist</a>` : ''}</span>
+      <button id="syncOff" class="small">Disconnect</button>
+    </div>`;
+}
+
+function bindSyncPanel() {
+  const panel = $('#syncPanel');
+  if (!panel) return;
+  const form = $('#syncConnect', panel);
+  if (form) form.onsubmit = e => { e.preventDefault(); Sync.connect(e.target.token.value); };
+  const now = $('#syncNow', panel);
+  if (now) now.onclick = () => Sync.syncNow();
+  const off = $('#syncOff', panel);
+  if (off) off.onclick = () => {
+    if (confirm('Stop syncing on this device? Your data stays here and in the gist.')) Sync.disconnect();
+  };
+}
+
+Sync.onStatus(st => {
+  if (!$('#syncPanel')) return;
+  // A finished sync may have brought in decks or reviews from the other device:
+  // redraw the whole home view (due counts) unless the user is typing in it.
+  const typing = document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
+  if (st.state === 'idle' && !typing) return viewHome();
+  $('#syncPanel').innerHTML = syncPanelHtml();
+  bindSyncPanel();
+});
 
 // =====================================================================
 // DECK EDITOR

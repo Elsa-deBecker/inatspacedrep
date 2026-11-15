@@ -7,9 +7,22 @@ photo, licensed CC0, CC BY, or CC BY-NC. Because you never see the same photo tw
 
 ## Running it
 
-Double-click `index.html`. It runs entirely in your browser with no install, build step, or
-server. It needs an internet connection: Leaflet loads from cdnjs, and map tiles come from Esri and iNat. Data is saved in the browser's local storage, so use the same browser each time,
-and use **Export** on the home screen for backups.
+Open the hosted copy on GitHub Pages (works on phones too), or double-click `index.html` to run it
+from disk. Either way it runs entirely in your browser with no install, build step, or server. It
+needs an internet connection: Leaflet loads from cdnjs, and map tiles come from Esri and iNat.
+Data is saved in the browser's local storage; use **Export** on the home screen for backups.
+
+## Syncing between devices
+
+The home screen's **Sync between devices** panel stores your data in a private GitHub Gist.
+[Create a classic token](https://github.com/settings/tokens/new?scopes=gist&description=iNat%20SRS%20sync)
+with only the `gist` scope and paste it in on each device. The first device creates the gist; the
+others find it automatically. The app then syncs when you open it, when you return to the tab, and
+about 20 seconds after any change. Each sync downloads the gist, merges it in (the same merge as
+**Import**), and uploads the result only if anything changed, so no review is ever lost.
+
+Note that the GitHub Pages copy and the double-clicked local copy are different origins with
+separate storage. Connect both to sync them, or just use one.
 
 ## Features
 
@@ -38,7 +51,8 @@ and use **Export** on the home screen for backups.
 
 | File | Role |
 |---|---|
-| `js/storage.js` | **The only place data is persisted.** Swap this to add cross-device sync. |
+| `js/storage.js` | **The only place data is persisted.** Also has export and the idempotent merge. |
+| `js/sync.js` | GitHub Gist sync: download → `Store.mergeJSON` → upload. Token kept outside the exported data. |
 | `js/fsrs.js` | FSRS scheduler (pure functions). |
 | `js/scheduler.js` | Replays the review log into card states and picks the next card. |
 | `js/inat.js` | iNat API client, throttled to about 1 request/sec as iNat requests. |
@@ -50,9 +64,8 @@ and use **Export** on the home screen for backups.
 
 **Sync-ready data model.** Reviews are an append-only log with unique IDs, and card schedules
 are *derived* from the log, never stored. Decks and cards merge last-write-wins by timestamp.
-So merging two devices just means unioning their logs; **Import** already does this. Adding
-real sync means replacing `storage.js` with something that does the same merge against a
-shared backend (a synced file, Supabase, Firebase, etc.).
+So merging two devices just means unioning their logs; **Import** and `sync.js` both do this.
+A different backend (Dropbox, Supabase, etc.) would only need its own download/upload in `sync.js`.
 
 **Planned extension points:**
 - *Multiple choice:* register a new mode in `modes.js` with `ReviewModes.register('choice', { label, mount(el, ctx) })`
