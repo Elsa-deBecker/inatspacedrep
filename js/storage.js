@@ -2,8 +2,9 @@
 // swapping localStorage for a sync backend later only means changing this file.
 //
 // Data model (designed to merge cleanly across devices):
-//   decks:    { [deckId]: { id, name, mode, newPerDay, updatedAt, deleted?,
-//                           cards: { [taxonId]: { addedAt, updatedAt, removed?, allowMultiPhoto? } } } }
+//   decks:    { [deckId]: { id, name, mode, newPerDay, updatedAt, deleted?, filters?,
+//                           cards: { [taxonId]: { addedAt, updatedAt, removed?, allowMultiPhoto?, filters? } } } }
+//             (filters: photo filters, see filters.js)
 //             → merged last-write-wins per deck field-group and per card.
 //   reviews:  append-only log [{ id, deckId, taxonId, ts, grade, obsId, mode }]
 //             → merged by union on id. Card schedules are DERIVED from this log.
@@ -79,18 +80,27 @@ const Store = (() => {
       .map(([taxonId, c]) => Object.assign({ taxonId: Number(taxonId) }, c));
   }
 
-  function addCards(deckId, taxonIds) {
+  /**
+   * Add cards with the given photo filters. Taxa already in the deck are left alone; those whose
+   * current filters differ are returned as `conflicts` so the UI can ask what to do.
+   */
+  function addCards(deckId, taxonIds, filters = null) {
     const d = data.decks[deckId];
     const now = Date.now();
     let added = 0;
+    const conflicts = [];
     for (const id of taxonIds) {
       const c = d.cards[id];
-      if (c && !c.removed) continue;
+      if (c && !c.removed) {
+        if (!Filters.same(c.filters, filters)) conflicts.push(Number(id));
+        continue;
+      }
       d.cards[id] = { addedAt: now, updatedAt: now, allowMultiPhoto: c ? !!c.allowMultiPhoto : false };
+      if (Filters.clean(filters)) d.cards[id].filters = Filters.clean(filters);
       added++;
     }
-    save();
-    return added;
+    if (added) save();
+    return { added, conflicts };
   }
 
   function updateCard(deckId, taxonId, patch) {
@@ -116,6 +126,7 @@ const Store = (() => {
 
   // ---------- taxa cache ----------
   const getTaxon = id => data.taxa[id] || null;
+  const allTaxa = () => Object.values(data.taxa);
   function putTaxa(list) { for (const t of list) data.taxa[t.id] = t; save(); }
 
   // ---------- settings ----------
@@ -140,8 +151,9 @@ const Store = (() => {
       if (k && k.startsWith(CACHE_PREFIX + prefix)) localStorage.removeItem(k);
     }
   }
-  // Drop pools in the old (pre-location) format.
-  try { clearPhotoCaches('pool.'); } catch { /* ignore */ }
+  // Drop pools in older formats ("pool." lacked locations, "pool2." lacked filters and
+  // the ancestry needed to accept more-specific answers). They're refetched as needed.
+  try { clearPhotoCaches('pool.'); clearPhotoCaches('pool2.'); } catch { /* ignore */ }
 
   // ---------- export / import / merge ----------
   function exportJSON() {
@@ -187,7 +199,7 @@ const Store = (() => {
     deckCards, addCards, updateCard, removeCard,
     addReview, reviewsFor, allReviews,
     blockObservation, isBlocked,
-    getTaxon, putTaxa, getSettings, updateSettings,
+    getTaxon, allTaxa, putTaxa, getSettings, updateSettings,
     getCache, setCache, clearPhotoCaches,
     exportJSON, mergeJSON, onChange,
   };

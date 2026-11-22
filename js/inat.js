@@ -8,7 +8,6 @@ const INat = (() => {
   const ALLOWED_LICENSES = ['cc0', 'cc-by', 'cc-by-nc'];
 
   let lastAt = 0;
-  let chain = Promise.resolve();
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   async function fetchWithRetry(url) {
@@ -29,17 +28,34 @@ const INat = (() => {
     }
   }
 
-  /** All requests are serialized through one queue with a minimum gap. */
-  function get(url) {
-    const p = chain.then(async () => {
-      const wait = lastAt + MIN_GAP_MS - Date.now();
-      if (wait > 0) await sleep(wait);
-      lastAt = Date.now();
-      return fetchWithRetry(url);
+  // All requests go through one queue with a minimum gap between starts. Requests the user is
+  // actively waiting on (searches, name lookups) jump ahead of background ones (photo pools,
+  // maps), but the overall rate never exceeds iNat's limit.
+  const queues = { high: [], low: [] };
+  let pumping = false;
+
+  function get(url, { priority = false } = {}) {
+    return new Promise((resolve, reject) => {
+      queues[priority ? 'high' : 'low'].push({ url, resolve, reject });
+      pump();
     });
-    chain = p.catch(() => {});
-    return p;
   }
+
+  async function pump() {
+    if (pumping) return;
+    pumping = true;
+    try {
+      for (;;) {
+        const job = queues.high.shift() || queues.low.shift();
+        if (!job) break;
+        const wait = lastAt + MIN_GAP_MS - Date.now();
+        if (wait > 0) await sleep(wait);
+        lastAt = Date.now();
+        try { job.resolve(await fetchWithRetry(job.url)); } catch (e) { job.reject(e); }
+      }
+    } finally { pumping = false; }
+  }
+  const hi = { priority: true };
 
   const qs = params => Object.entries(params)
     .filter(([, v]) => v !== undefined && v !== null && v !== '')
@@ -49,17 +65,17 @@ const INat = (() => {
 
   // ---------- taxa ----------
   const autocompleteTaxa = q =>
-    get(`${V1}/taxa/autocomplete?${qs({ q, per_page: 10, locale: locale() })}`).then(d => d.results);
+    get(`${V1}/taxa/autocomplete?${qs({ q, per_page: 10, locale: locale() })}`, hi).then(d => d.results);
 
   const searchTaxa = q =>
-    get(`${V1}/taxa?${qs({ q, per_page: 5, is_active: true, locale: locale() })}`).then(d => d.results);
+    get(`${V1}/taxa?${qs({ q, per_page: 5, is_active: true, locale: locale() })}`, hi).then(d => d.results);
 
   /** Full taxon records (with all names) normalized for our cache. */
-  async function fetchTaxa(ids) {
+  async function fetchTaxa(ids, { priority = true } = {}) {
     const out = [];
     for (let i = 0; i < ids.length; i += 30) {
       const chunk = ids.slice(i, i + 30);
-      const d = await get(`${V1}/taxa/${chunk.join(',')}?${qs({ all_names: true, locale: locale() })}`);
+      const d = await get(`${V1}/taxa/${chunk.join(',')}?${qs({ all_names: true, locale: locale() })}`, { priority });
       out.push(...d.results.map(normalizeTaxon));
     }
     return out;
@@ -82,6 +98,10 @@ const INat = (() => {
       family: anc.family || null, order: anc.order || null,
       thumb: t.default_photo ? t.default_photo.square_url : null,
       names, sciNames, fetchedAt: Date.now(),
+      // Root → parent. Used to find which deck cards fall inside which, and to recognize an
+      // answer that's correct but too general ("Anas" on a Mallard card).
+      ancestors: (t.ancestors || []).filter(a => a.id !== t.id).map(a => ({
+        id: a.id, name: a.name, rank: a.rank, commonName: a.preferred_common_name || null })),
     };
   }
 
@@ -93,7 +113,7 @@ const INat = (() => {
 
   // ---------- places ----------
   const autocompletePlaces = q =>
-    get(`${V1}/places/autocomplete?${qs({ q, per_page: 10 })}`).then(d => d.results);
+    get(`${V1}/places/autocomplete?${qs({ q, per_page: 10 })}`, hi).then(d => d.results);
 
   /** Of the given place ids, the standard places at an admin level (0 = country, 10 = state/province). */
   async function placesAtLevel(ids, adminLevel) {
@@ -106,11 +126,12 @@ const INat = (() => {
   }
 
   // ---------- deck generation ----------
-  async function speciesCounts({ taxonId, placeId, count }) {
-    const d = await get(`${V1}/observations/species_counts?${qs({
-      taxon_id: taxonId, place_id: placeId, quality_grade: 'research',
+  /** params: extra observation-search params (place, months, dates, annotation) from Filters. */
+  async function speciesCounts({ taxonId, count, params = {} }) {
+    const d = await get(`${V1}/observations/species_counts?${qs(Object.assign({}, params, {
+      taxon_id: taxonId, quality_grade: 'research',
       per_page: Math.min(500, count * 2), locale: locale(),
-    })}`);
+    }))}`, hi);
     return d.results.filter(r => r.taxon.rank === 'species').slice(0, count);
   }
 
@@ -118,7 +139,8 @@ const INat = (() => {
   const OBS_FIELDS = '(id:!t,observed_on:!t,place_guess:!t,user:(login:!t,name:!t),' +
     'location:!t,obscured:!t,public_positional_accuracy:!t,place_ids:!t,' +
     'photos:(id:!t,url:!t,license_code:!t,attribution:!t),' +
-    'taxon:(id:!t,name:!t,rank:!t,preferred_common_name:!t))';
+    'annotations:(controlled_attribute_id:!t,controlled_value_id:!t,vote_score:!t),' +
+    'taxon:(id:!t,name:!t,rank:!t,preferred_common_name:!t,ancestor_ids:!t))';
 
   /**
    * One page of research-grade observations with an allowed-license photo.
@@ -140,6 +162,16 @@ const INat = (() => {
     return d.results[0] || null;
   }
 
-  return { autocompleteTaxa, searchTaxa, fetchTaxa, taxonBounds, autocompletePlaces, placesAtLevel,
+  // ---------- annotations ----------
+  /** iNat's annotation vocabulary, normalized: [{ id, label, taxonIds, exceptIds, values: [{ id, label, taxonIds }] }] */
+  async function controlledTerms() {
+    const d = await get(`${V1}/controlled_terms`, hi);
+    return d.results.map(t => ({
+      id: t.id, label: t.label, taxonIds: t.taxon_ids || null, exceptIds: t.excepted_taxon_ids || null,
+      values: (t.values || []).map(v => ({ id: v.id, label: v.label, taxonIds: v.taxon_ids || null })),
+    }));
+  }
+
+  return { controlledTerms, autocompleteTaxa, searchTaxa, fetchTaxa, taxonBounds, autocompletePlaces, placesAtLevel,
     speciesCounts, observations, observation, ALLOWED_LICENSES };
 })();

@@ -27,14 +27,29 @@ separate storage. Connect both to sync them, or just use one.
 ## Features
 
 - **Cards can be any rank**, from kingdom down to subspecies. A genus card shows photos of any member of that genus.
+- **Broader cards exclude narrower ones in the same deck.** With cards for *Anatini* and Mallard, the Anatini card
+  never shows Mallards, so it trains "a dabbler that isn't a Mallard" (Mallards are ~70% of *Anas* photos on iNat,
+  so without this the broad card would mostly be a second Mallard card). The answer side says what's excluded.
+- **Photo filters** limit which observations a card's photos come from: place, annotations ("is" or "is not",
+  e.g. Life Stage, Sex, Alive or Dead, Evidence of Presence, Flowers and Fruits), a month range (can wrap around
+  the new year) and a date range.
+  - Set defaults for the whole deck, then add filters per card on top (a card's place, months and dates replace
+    the deck's; annotations from both apply). Cards can also ignore the deck's place or other filters.
+  - The *Extra photo filters* box above the add tabs applies to cards added by any method. Re-adding a card that
+    exists with different filters asks whether to change them.
+  - "Is not" keeps unannotated observations, while "is" only keeps annotated ones, so prefer "is not" where it fits.
 - **Three ways to add taxa:**
   - Search with autocomplete.
-  - Paste a list of names. Each one is looked up, and anything that isn't an exact match is flagged for you to check.
-  - Generate from iNat: the top *N* most-observed species within a taxon, optionally limited to a place.
+  - Paste a list of names. Names the app already knows (from any deck) match instantly; the rest are looked up at iNat's
+    rate limit of about one per second, and each row appears as soon as it's found. Anything that isn't an exact match is flagged for you to check.
+  - Generate from iNat: the top *N* most-observed species within a taxon, counted with the current photo filters
+    (so a place and months filter gives the commonest species there and then).
 - **Two review modes**, set per deck:
   - Recall, then self-grade: Space to reveal, 1–4 to grade.
   - Type the name: scientific (`Genus species` or `G. species`) or common name, typo-tolerant, with a suggested grade you can override.
-  - If a card is a genus and you type the observation's exact species, it counts as correct.
+  - On a broader card, naming the observation's more specific taxon counts as correct (typos allowed, and a
+    subspecies observation accepts its species). Naming a taxon the card excludes is wrong, with an explanation.
+  - On a narrower card, naming a broader group ("Anas" for a Mallard) is marked wrong as too general.
 - **Scheduling uses FSRS-4.5** (the algorithm modern Anki uses), with 90% target retention, an Anki-style 4am day boundary, and a configurable new-cards-per-day limit.
   - "Again" on a card you've never gotten right brings it back in 1 minute; on a card you'd learned, in 5 minutes.
   - After an "Again", the card comes back with **the same photo**. Once you get it right, it goes back to fresh photos.
@@ -56,7 +71,8 @@ separate storage. Connect both to sync them, or just use one.
 | `js/fsrs.js` | FSRS scheduler (pure functions). |
 | `js/scheduler.js` | Replays the review log into card states and picks the next card. |
 | `js/inat.js` | iNat API client, throttled to about 1 request/sec as iNat requests. |
-| `js/photos.js` | Per-taxon photo pools: sampling, caching, choosing unseen observations, image preloading. |
+| `js/filters.js` | Photo filters: deck + card combination, same-deck exclusions, iNat query params, summaries, annotation vocabulary. |
+| `js/photos.js` | Per-card photo pools (keyed by taxon + filters): sampling, caching, choosing unseen observations, image preloading. |
 | `js/maps.js` | Leaflet maps: observation location (question) and taxon distribution and range (answer). |
 | `js/modes.js` | Review-mode plugins (`self`, `typed`). |
 | `js/match.js` | Fuzzy name matching. |
@@ -70,9 +86,8 @@ A different backend (Dropbox, Supabase, etc.) would only need its own download/u
 **Planned extension points:**
 - *Multiple choice:* register a new mode in `modes.js` with `ReviewModes.register('choice', { label, mount(el, ctx) })`
   that builds distractors and calls `ctx.reveal({ suggested })`.
-- *More photo filters* (place, month, life stage, annotations…): `INat.observations()` accepts an `extra`
-  object of iNat observation-search parameters. Pass per-card or per-deck filters through
-  `Photos.next()` and include them in the pool cache key.
+- *More photo filters:* add the field to the filter object in `filters.js` (`clean`, `combine`, `query`, `parts`)
+  and a control in `filterEditor()` in `app.js`. The pool cache key picks it up automatically.
 
 ## Notes
 

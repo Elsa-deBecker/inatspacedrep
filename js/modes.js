@@ -3,7 +3,8 @@
 // The review screen then shows the answer and the Again/Hard/Good/Easy buttons.
 //
 // To add a mode later (e.g. multiple choice), call ReviewModes.register('choice', {...}).
-// ctx provides: { taxon, photo, deckId, reveal(result), escape(str) }.
+// ctx provides: { taxon, photo, deckId, answerGroups, reveal(result), escape(str) }.
+// answerGroups is the input for Match.check (card, more-specific, excluded and broader taxa).
 // A multiple-choice mode would build its distractors (e.g. via INat taxa/similar_species
 // or sibling taxa in the deck) inside mount(), then call ctx.reveal with a suggested grade.
 'use strict';
@@ -45,18 +46,18 @@ ReviewModes.register('typed', {
     input.focus();
     form.onsubmit = e => {
       e.preventDefault();
-      const t = ctx.taxon;
-      const obsT = ctx.photo.taxon && ctx.photo.taxon.id !== t.id ? ctx.photo.taxon : null;
-      const obsNames = obsT ? [obsT.name, obsT.commonName] : [];
-      const r = Match.check(input.value, t.names || [t.name, t.commonName], obsNames,
-        t.sciNames || [t.name], obsT ? [obsT.name] : []);
+      const r = Match.check(input.value, ctx.answerGroups);
       if (r.result === 'empty') { input.focus(); return; }
       input.disabled = true;
-      const you = `You typed: <b>${ctx.escape(input.value)}</b>`;
+      const x = ctx.escape;
+      const you = `You typed: <b>${x(input.value)}</b>`;
+      const cardLabel = x(ctx.taxon.commonName || ctx.taxon.name);
       const fb = {
         exact: ['ok', `✓ Correct. ${you}`, 3],
-        close: ['ok', `✓ Close enough (matched “${ctx.escape(r.matched)}”). ${you}`, 3],
-        specific: ['ok', `✓ Correct, and more specific than this card asks. ${you}`, 3],
+        close: ['ok', `✓ Close enough. ${you}`, 3],
+        specific: ['ok', `✓ ${r.close ? 'Close enough to' : 'Correct:'} ${x(r.label)}, more specific than this card asks. ${you}`, 3],
+        excluded: ['bad', `✗ Not ${x(r.label)}. This card never shows ${x(r.label)}, since it has its own card in this deck. ${you}`, 1],
+        broad: ['bad', `✗ Right, but too general: ${x(r.label)} includes more than this. The card asks for ${cardLabel}. ${you}`, 1],
         wrong: ['bad', `✗ Not quite. ${you}`, 1],
       }[r.result];
       ctx.reveal({ suggested: fb[2], feedbackHtml: `<div class="feedback ${fb[0]}">${fb[1]}</div>` });

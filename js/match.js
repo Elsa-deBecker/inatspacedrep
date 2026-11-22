@@ -26,11 +26,6 @@ const Match = (() => {
   const tolerance = len => len <= 4 ? 0 : len <= 8 ? 1 : len <= 16 ? 2 : 3;
 
   /**
-   * Compare an answer against the card's accepted names (and optionally the names of the
-   * observation's own, possibly more specific, taxon).
-   * Returns { result: 'exact'|'close'|'specific'|'wrong'|'empty', matched }.
-   */
-  /**
    * "G. species" style: if the answer starts with a single letter, compare it against the genus
    * initial (must match exactly) and the rest of the name (typo-tolerant).
    * Returns 0 (exact), a positive distance within tolerance, or -1 (no match).
@@ -46,34 +41,62 @@ const Match = (() => {
   }
 
   /**
-   * Compare an answer against the card's accepted names (and optionally the names of the
-   * observation's own, possibly more specific, taxon).
-   * sciNames: scientific names, which also accept the "G. species" abbreviation.
-   * Returns { result: 'exact'|'close'|'specific'|'wrong'|'empty', matched }.
+   * Distance from an answer to a group of names: 0 = exact, >0 = within typo tolerance,
+   * -1 = no match. `sciNames` also accept the "G. species" abbreviation.
    */
-  function check(answer, names, obsNames = [], sciNames = [], obsSciNames = []) {
-    const a = normalize(answer);
-    if (!a) return { result: 'empty' };
-    let best = null;
+  function distance(a, { names = [], sciNames = [] }) {
+    let best = -1;
     for (const n of names) {
-      const nn = normalize(n);
+      const nn = n && normalize(n);
       if (!nn) continue;
-      if (nn === a) return { result: 'exact', matched: n };
+      if (nn === a) return 0;
       const d = levenshtein(a, nn);
-      if (d <= tolerance(nn.length) && (!best || d < best.d)) best = { d, n };
+      if (d <= tolerance(nn.length) && (best < 0 || d < best)) best = d;
     }
     for (const n of sciNames) {
+      if (!n) continue;
       const d = abbrevDistance(a, n);
-      if (d === 0) return { result: 'exact', matched: n };
-      if (d > 0 && (!best || d < best.d)) best = { d, n };
+      if (d === 0) return 0;
+      if (d > 0 && (best < 0 || d < best)) best = d;
     }
-    if (best) return { result: 'close', matched: best.n };
-    for (const n of obsNames) {
-      if (n && normalize(n) === a) return { result: 'specific', matched: n };
+    return best;
+  }
+
+  /** Best-matching group from a list: { group, d } or null. Exact matches win over close ones. */
+  function bestOf(a, groups) {
+    let best = null;
+    for (const g of groups || []) {
+      const d = distance(a, g);
+      if (d >= 0 && (!best || d < best.d)) best = { group: g, d };
     }
-    for (const n of obsSciNames) {
-      if (n && abbrevDistance(a, n) === 0) return { result: 'specific', matched: n };
-    }
+    return best;
+  }
+
+  /**
+   * Check a typed answer.
+   *   card:     { names, sciNames }   the card's own taxon
+   *   specific: [{ names, sciNames, label }]  taxa between the card and the observation (inclusive
+   *             of the observation's taxon): naming one is correct, just more specific
+   *   excluded: [...]  taxa this card never shows because they have their own card in the deck
+   *   broader:  [...]  the card's ancestors: naming one is right but too general
+   * Returns { result: 'exact'|'close'|'specific'|'excluded'|'broad'|'wrong'|'empty', label? }.
+   *
+   * Order matters: the card itself wins, then more-specific names. An exact match to an
+   * excluded or broader taxon beats a merely close match to a more specific one.
+   */
+  function check(answer, { card, specific = [], excluded = [], broader = [] }) {
+    const a = normalize(answer);
+    if (!a) return { result: 'empty' };
+    const c = distance(a, card);
+    if (c === 0) return { result: 'exact' };
+    if (c > 0) return { result: 'close' };
+    const sp = bestOf(a, specific), ex = bestOf(a, excluded), br = bestOf(a, broader);
+    if (sp && sp.d === 0) return { result: 'specific', label: sp.group.label };
+    if (ex && ex.d === 0) return { result: 'excluded', label: ex.group.label };
+    if (br && br.d === 0) return { result: 'broad', label: br.group.label };
+    if (sp) return { result: 'specific', label: sp.group.label, close: true };
+    if (ex) return { result: 'excluded', label: ex.group.label };
+    if (br) return { result: 'broad', label: br.group.label };
     return { result: 'wrong' };
   }
 
