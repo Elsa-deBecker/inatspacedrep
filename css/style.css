@@ -35,7 +35,7 @@ footer { margin-top: 24px; text-align: center; }
 
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 16px; margin-bottom: 16px; }
-.panel.danger { background: transparent; border: none; padding: 0; text-align: right; }
+.panel.bottom-actions { background: transparent; border: none; padding: 0; text-align: right; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
 .row.spread { justify-content: space-between; margin-top: 0; }
 .row h2 { margin: 0; }

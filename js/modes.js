@@ -58,7 +58,7 @@ ReviewModes.register('typed', {
         specific: ['ok', `✓ ${r.close ? 'Close enough to' : 'Correct:'} ${x(r.label)}, more specific than this card asks. ${you}`, 3],
         excluded: ['bad', `✗ Not ${x(r.label)}. This card never shows ${x(r.label)}, since it has its own card in this deck. ${you}`, 1],
         broad: ['bad', `✗ Right, but too general: ${x(r.label)} includes more than this. The card asks for ${cardLabel}. ${you}`, 1],
-        wrong: ['bad', `✗ Not quite. ${you}`, 1],
+        wrong: ['bad', `✗ Incorrect. ${you}`, 1],
       }[r.result];
       ctx.reveal({ suggested: fb[2], feedbackHtml: `<div class="feedback ${fb[0]}">${fb[1]}</div>` });
     };

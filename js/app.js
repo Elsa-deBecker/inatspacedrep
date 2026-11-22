@@ -390,10 +390,7 @@ function viewDeck(deckId) {
   app.innerHTML = `
     <header class="top">
       <a href="#/" class="back">← Decks</a>
-      <div class="row spread">
-        <input class="title-input" id="deckName" value="${esc(deck.name)}" aria-label="Deck name">
-        <a class="button primary" id="studyBtn" href="#/study/${deck.id}">Study</a>
-      </div>
+      <input class="title-input" id="deckName" value="${esc(deck.name)}" aria-label="Deck name">
     </header>
 
     <section class="panel">
@@ -463,8 +460,8 @@ function viewDeck(deckId) {
       <div id="cards"></div>
     </section>
 
-    <section class="panel danger">
-      <button id="deleteDeck">Delete deck</button>
+    <section class="panel bottom-actions">
+      <a class="button primary" id="studyBtn" href="#/study/${deck.id}">Study</a>
     </section>`;
 
   // --- settings ---
@@ -473,12 +470,6 @@ function viewDeck(deckId) {
   $('#order').onchange = e => Store.updateDeck(deckId, { order: e.target.value });
   $('#showMap').onchange = e => Store.updateDeck(deckId, { showMap: e.target.checked });
   $('#newPerDay').onchange = e => Store.updateDeck(deckId, { newPerDay: Math.max(0, parseInt(e.target.value, 10) || 0) });
-  $('#deleteDeck').onclick = e => {
-    if (e.target.dataset.armed) { Store.deleteDeck(deckId); location.hash = '#/'; return; }
-    e.target.dataset.armed = '1';
-    e.target.textContent = 'Click again to delete this deck';
-    e.target.classList.add('primary');
-  };
 
   // --- photo filters ---
   let addF = null;
