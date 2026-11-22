@@ -26,6 +26,7 @@ a { color: var(--accent); }
 .small { font-size: .85rem; }
 .error { color: var(--bad); }
 .right { text-align: right; }
+.nowrap { white-space: nowrap; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .due { color: var(--due); }
 .new { color: var(--new); }

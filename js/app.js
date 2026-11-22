@@ -260,7 +260,8 @@ function viewHome() {
     return `<tr>
       <td><a href="#/deck/${d.id}">${esc(d.name)}</a></td>
       <td class="num due">${s.due.length}</td><td class="num new">${s.newLeft}</td><td class="num">${s.total}</td>
-      <td class="right">${n ? `<a class="button primary" href="#/study/${d.id}">Study</a>` : '<span class="muted">Done</span>'}</td>
+      <td class="right nowrap">${n ? `<a class="button primary" href="#/study/${d.id}">Study</a>` : '<span class="muted">Done</span>'}
+        <button class="small" data-delete="${d.id}" title="Delete this deck">Delete</button></td>
     </tr>`;
   }).join('');
 
@@ -294,6 +295,14 @@ function viewHome() {
     </section>
     <footer class="muted small">Photos come from research-grade iNaturalist observations licensed CC0, CC BY, or CC BY-NC, credited on every card.</footer>`;
 
+  app.querySelectorAll('[data-delete]').forEach(b => b.onclick = () => {
+    const d = Store.getDeck(b.dataset.delete);
+    if (!d) return;
+    const n = Store.deckCards(d.id).length;
+    if (!confirm(`Delete the deck “${d.name}” (${n} card${n === 1 ? '' : 's'})?`)) return;
+    Store.deleteDeck(d.id);
+    viewHome();
+  });
   $('#newDeck').onsubmit = e => {
     e.preventDefault();
     const d = Store.createDeck(e.target.name.value.trim());
