@@ -543,6 +543,24 @@ function viewDeck(deckId) {
   });
 
   // --- paste tab ---
+  /**
+   * How confidently search results match a typed name. Confident only if exactly one result's
+   * current scientific name or main common name equals it. Matches only via another name
+   * (synonym, old or alternate name) and same-name taxa (e.g. Morus, a plant and a bird genus)
+   * are flagged and left unticked.
+   */
+  function judgeMatch(line, results) {
+    const n = Match.normalize(line);
+    const eq = x => x && Match.normalize(x) === n;
+    const primary = results.map((r, i) => eq(r.name) || eq(r.preferred_common_name) ? i : -1).filter(i => i >= 0);
+    if (primary.length === 1) return { results, exact: true, sel: primary[0] };
+    if (primary.length > 1) return { results, exact: false, sel: primary[0], note: `${primary.length} taxa have this name, pick one` };
+    const alt = results.findIndex(r => eq(r.matched_term));
+    if (alt >= 0) return { results, exact: false, sel: alt,
+      note: `matched “${results[alt].matched_term}”, which iNat lists as another name (synonym, older or alternate name) for this taxon` };
+    return { results, exact: false, sel: 0, note: results.length ? 'no exact match, closest results shown' : '' };
+  }
+
   // Names already in the local taxa cache (e.g. from other decks) resolve without a request.
   // The rest are looked up one per request (iNat's rate limit), and each row appears as soon
   // as its answer arrives, so you can review matches while later ones load.
@@ -552,9 +570,12 @@ function viewDeck(deckId) {
     if (!lines.length) return;
     const run = ++resolveRun;
     const out = $('#resolveOut');
+    // Only current scientific names and main common names count as confident matches. Synonyms
+    // and older names (e.g. "Aythyini", which iNat merged into Anatidae) go to the network lookup,
+    // where they're flagged.
     const local = new Map();
     for (const t of Store.allTaxa()) {
-      for (const n of [t.name, t.commonName, ...(t.names || [])]) {
+      for (const n of [t.name, t.commonName]) {
         if (!n) continue;
         const k = Match.normalize(n);
         if (!local.has(k)) local.set(k, t);
@@ -575,7 +596,7 @@ function viewDeck(deckId) {
         <td>${esc(r.line)}</td>
         <td>${r.results.length ? `<select data-i="${i}">${r.results.map((t, j) =>
             `<option value="${t.id}" ${j === r.sel ? 'selected' : ''}>${esc(t.name)}${t.preferred_common_name ? ' (' + esc(t.preferred_common_name) + ')' : ''} — ${esc(t.rank)}</option>`).join('')}</select>
-            ${r.exact ? '' : '<span class="warn-inline">check this</span>'}`
+            ${r.exact ? '' : `<span class="warn-inline">${esc(r.note || 'not an exact match, check this')}</span>`}`
           : '<span class="warn-inline">no match</span>'}</td>`;
     };
     $('#addResolved').onclick = async () => {
@@ -607,10 +628,7 @@ function viewDeck(deckId) {
       let results = [];
       try { results = await INat.searchTaxa(rows[i].line); } catch (e) { /* leave empty */ }
       if (run !== resolveRun || !out.isConnected) return;
-      const n = Match.normalize(rows[i].line);
-      const exactIdx = results.findIndex(r => [r.name, r.preferred_common_name, r.matched_term]
-        .some(x => x && Match.normalize(x) === n));
-      Object.assign(rows[i], { results, exact: exactIdx >= 0, sel: Math.max(0, exactIdx) });
+      Object.assign(rows[i], judgeMatch(rows[i].line, results));
       renderRow(i);
     }
     if (run === resolveRun) $('#resolveMsg').textContent = '';
