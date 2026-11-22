@@ -162,6 +162,16 @@ const INat = (() => {
     return d.results[0] || null;
   }
 
+  // ---------- lookalikes ----------
+  /**
+   * Taxa that observations of this taxon were misidentified as (or vice versa), with counts,
+   * optionally within a place. iNat returns roughly the top 24, at the taxon's own rank.
+   */
+  async function similarSpecies(taxonId, placeId) {
+    const d = await get(`${V1}/identifications/similar_species?${qs({ taxon_id: taxonId, place_id: placeId || undefined, quality_grade: 'research' })}`);
+    return d.results.map(r => ({ id: r.taxon.id, count: r.count }));
+  }
+
   // ---------- annotations ----------
   /** iNat's annotation vocabulary, normalized: [{ id, label, taxonIds, exceptIds, values: [{ id, label, taxonIds }] }] */
   async function controlledTerms() {
@@ -172,6 +182,6 @@ const INat = (() => {
     }));
   }
 
-  return { controlledTerms, autocompleteTaxa, searchTaxa, fetchTaxa, taxonBounds, autocompletePlaces, placesAtLevel,
+  return { similarSpecies, controlledTerms, autocompleteTaxa, searchTaxa, fetchTaxa, taxonBounds, autocompletePlaces, placesAtLevel,
     speciesCounts, observations, observation, ALLOWED_LICENSES };
 })();

@@ -235,6 +235,13 @@ const taxonAcRender = t => `
   ${t.default_photo ? `<img src="${esc(t.default_photo.square_url)}" alt="">` : '<span class="noimg"></span>'}
   <span>${nameHtml(t)}<small class="muted"> · ${(t.observations_count || 0).toLocaleString()} obs</small></span>`;
 
+/** Cards whose lookalike data matters for "Similar together": not yet started, or started today. */
+function similarCandidates(deckId) {
+  const st = Scheduler.states(deckId);
+  const today = FSRS.dayStart(Date.now());
+  return Store.deckCards(deckId).filter(c => { const s = st.get(c.taxonId); return !s || s.firstTs >= today; });
+}
+
 /** Card filters that drop both the card's own and the deck's filters. */
 const NO_FILTERS = { noDeckPlace: true, noDeckFilters: true };
 
@@ -411,10 +418,12 @@ function viewDeck(deckId) {
         <label>New cards / day <input id="newPerDay" type="number" min="0" max="999" value="${deck.newPerDay}"></label>
         <label>Card order
           <select id="order">
-            <option value="random" ${deck.order !== 'added' ? 'selected' : ''}>Random</option>
+            <option value="random" ${!deck.order || deck.order === 'random' ? 'selected' : ''}>Random</option>
             <option value="added" ${deck.order === 'added' ? 'selected' : ''}>As added</option>
+            <option value="similar" ${deck.order === 'similar' ? 'selected' : ''}>Similar together</option>
           </select></label>
       </div>
+      <p class="muted small" id="orderNote"></p>
       <div class="row">
         <label><input type="checkbox" id="showMap" ${deck.showMap !== false ? 'checked' : ''}>
           Show where the photo was taken (map) before revealing the answer</label>
@@ -476,7 +485,29 @@ function viewDeck(deckId) {
   // --- settings ---
   $('#deckName').onchange = e => Store.updateDeck(deckId, { name: e.target.value.trim() || deck.name });
   $('#mode').onchange = e => Store.updateDeck(deckId, { mode: e.target.value });
-  $('#order').onchange = e => Store.updateDeck(deckId, { order: e.target.value });
+  $('#order').onchange = e => { Store.updateDeck(deckId, { order: e.target.value }); loadLookalikes(); renderCards(); };
+
+  // "Similar together" needs iNat's confusion data for each new card (one request per card,
+  // fetched once and cached for a month). Shows progress under the order setting.
+  let lookalikeRun = 0;
+  async function loadLookalikes() {
+    const note = $('#orderNote');
+    const run = ++lookalikeRun;
+    if (Store.getDeck(deckId).order !== 'similar') { note.textContent = ''; return; }
+    const explain = 'New cards that people often confuse with each other (going by iNaturalist misidentifications' +
+      `${Similar.placeOf(deckId) ? ' in the deck\'s place' : ''}) are introduced on the same day. Groups are always finished, ` +
+      'so a day can go up to 4 cards over or under the daily limit.';
+    note.textContent = explain;
+    const todo = Similar.missing(deckId, similarCandidates(deckId));
+    if (!todo.length) return;
+    const { failed } = await Similar.ensure(deckId, todo, (i, n) => {
+      if (run === lookalikeRun && note.isConnected) note.textContent = `${explain} Finding lookalikes: ${i} of ${n}…`;
+    });
+    if (run !== lookalikeRun || !note.isConnected) return;
+    note.textContent = explain + (failed ? ` Couldn't load lookalike data for ${failed} card${failed > 1 ? 's' : ''}; ` +
+      'they count as having no lookalikes for now and will be retried.' : '');
+    renderCards();
+  }
   $('#showMap').onchange = e => Store.updateDeck(deckId, { showMap: e.target.checked });
   $('#newPerDay').onchange = e => Store.updateDeck(deckId, { newPerDay: Math.max(0, parseInt(e.target.value, 10) || 0) });
 
@@ -515,6 +546,7 @@ function viewDeck(deckId) {
     addMsg(added ? `Added ${added} card${added > 1 ? 's' : ''}.` : conflicts.length ? '' : 'Already in deck.');
     renderCards();
     if (conflicts.length) showConflicts(conflicts, addF);
+    if (added) loadLookalikes();
     return added;
   };
   function showConflicts(ids, filters) {
@@ -688,9 +720,20 @@ function viewDeck(deckId) {
     return lines.join('');
   }
 
+  /** For a not-yet-started card in a lookalike group: which cards it's introduced with. */
+  function groupHtml(c, st, plan) {
+    if (st || !plan.groupOf) return '';
+    const g = plan.groupOf.get(c.taxonId);
+    if (!g || g.length < 2) return '';
+    const others = g.filter(id => id !== c.taxonId).map(Filters.taxonLabel).map(esc).join(', ');
+    return `<div class="small fsum">New together with ${others}</div>`;
+  }
+
   function renderCards() {
     const cards = Store.deckCards(deckId).sort((a, b) => a.addedAt - b.addedAt);
     const states = Scheduler.states(deckId);
+    const plan = Scheduler.summary(deckId);
+    const similarOn = Store.getDeck(deckId).order === 'similar';
     const now = Date.now();
     $('#cardCount').textContent = `(${cards.length})`;
     let lowCount = 0;
@@ -709,7 +752,7 @@ function viewDeck(deckId) {
       const own = Filters.clean(c.filters);
       return `<tr data-id="${c.taxonId}">
         <td class="thumb">${t.thumb ? `<img src="${esc(t.thumb)}" alt="">` : ''}</td>
-        <td>${nameHtml(t)}${t.family ? `<div class="muted small">${esc(t.family)}</div>` : ''}${cardFilterHtml(c, spec)}</td>
+        <td>${nameHtml(t)}${t.family ? `<div class="muted small">${esc(t.family)}</div>` : ''}${cardFilterHtml(c, spec)}${similarOn ? groupHtml(c, st, plan) : ''}</td>
         <td>${status}</td>
         <td class="num">${photos}</td>
         <td><label class="small" title="Also use observations with more than one photo (first eligible photo is shown)">
@@ -733,7 +776,7 @@ function viewDeck(deckId) {
       }
       renderCards();
     };
-    const s = Scheduler.summary(deckId);
+    const s = plan;
     const n = s.due.length + s.newLeft;
     $('#studyBtn').textContent = n ? `Study (${s.due.length} due, ${s.newLeft} new)` : 'Study';
   }
@@ -792,6 +835,7 @@ function viewDeck(deckId) {
   };
 
   renderCards();
+  loadLookalikes();
   // Older cached taxa lack ancestry, which exclusions need: fetch it quietly, then redraw.
   ensureTaxa(Store.deckCards(deckId).map(c => c.taxonId), { priority: false })
     .then(n => { if (n && $('#cards') && !$('.fe-tr')) renderCards(); }).catch(() => {});
@@ -1117,10 +1161,18 @@ function viewStudy(deckId) {
   viewCleanup = () => { document.removeEventListener('keydown', onKey); token++; clearMaps(); };
 
   // Exclusions need every card's ancestry; older cached taxa lack it (fetched once, then synced).
+  // "Similar together" also needs lookalike data for new cards before choosing today's.
   const startToken = token;
   stage.innerHTML = LOADING;
-  ensureTaxa(Store.deckCards(deckId).map(c => c.taxonId)).catch(() => {})
-    .then(() => { if (token === startToken) loadNext(); });
+  (async () => {
+    await ensureTaxa(Store.deckCards(deckId).map(c => c.taxonId)).catch(() => {});
+    if (deck.order === 'similar') {
+      await Similar.ensure(deckId, similarCandidates(deckId), (i, n) => {
+        if (token === startToken && n) stage.innerHTML = `<div class="loading">Finding lookalikes among new cards: ${i} of ${n}…</div>`;
+      }).catch(() => {});
+    }
+    if (token === startToken) loadNext();
+  })();
 }
 
 route();

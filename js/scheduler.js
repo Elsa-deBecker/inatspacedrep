@@ -26,6 +26,51 @@ const Scheduler = (() => {
     return (h ^ (h >>> 16)) >>> 0;
   }
 
+  const SIMILAR_SLACK = 4; // a day's new cards may land this far over or under the limit
+
+  /**
+   * "Similar together": order new cards in lookalike groups and decide how many to introduce
+   * today. A group started today is always finished. Other groups are added whole, in daily
+   * random order, until the day reaches the limit, skipping groups that would overshoot by more
+   * than SIMILAR_SLACK. If that leaves the day more than SIMILAR_SLACK short, the group that
+   * lands closest to the limit is added. Returns { fresh, newLeft, groupOf }.
+   */
+  function planSimilar(deckId, cards, st, today, limit, rank) {
+    const introducedToday = cards.filter(c => { const s = st.get(c.taxonId); return s && s.firstTs >= today; });
+    const freshCards = cards.filter(c => !st.get(c.taxonId));
+    const byId = new Map(cards.map(c => [c.taxonId, c]));
+    const startedToday = new Set(introducedToday.map(c => c.taxonId));
+    const groups = Similar.groups(deckId, [...introducedToday, ...freshCards].map(c => c.taxonId));
+
+    const groupOf = new Map();
+    const mandatory = [], open = [];
+    for (const g of groups) {
+      for (const id of g) groupOf.set(id, g);
+      const freshPart = g.filter(id => !st.get(id)).map(id => byId.get(id)).sort((a, b) => rank(a) - rank(b));
+      if (!freshPart.length) continue;
+      (g.some(id => startedToday.has(id)) ? mandatory : open).push(freshPart);
+    }
+    open.sort((a, b) => rank(a[0]) - rank(b[0]));
+
+    let total = introducedToday.length + mandatory.reduce((n, g) => n + g.length, 0);
+    const chosen = new Set();
+    if (limit > 0) {
+      for (const g of open) {
+        if (total >= limit) break;
+        if (total + g.length <= limit + SIMILAR_SLACK) { chosen.add(g); total += g.length; }
+      }
+      const rest = open.filter(g => !chosen.has(g));
+      if (rest.length && (total < limit - SIMILAR_SLACK || total === 0)) {
+        const best = rest.reduce((b, g) => Math.abs(total + g.length - limit) < Math.abs(total + b.length - limit) ? g : b);
+        // Take it if it brings the day closer to the limit, or if nothing would be introduced otherwise.
+        if (Math.abs(total + best.length - limit) < limit - total || total === 0) chosen.add(best);
+      }
+    }
+    const today_ = [...mandatory.flat(), ...open.filter(g => chosen.has(g)).flat()];
+    const later = open.filter(g => !chosen.has(g)).flat();
+    return { fresh: [...today_, ...later], newLeft: today_.length, groupOf };
+  }
+
   function summary(deckId, now = Date.now()) {
     const deck = Store.getDeck(deckId);
     const random = !deck || deck.order !== 'added';
@@ -52,9 +97,15 @@ const Scheduler = (() => {
       due.sort((a, b) => a.state.due - b.state.due);
       fresh.sort((a, b) => a.addedAt - b.addedAt || a.taxonId - b.taxonId);
     }
-    const newLeft = Math.min(fresh.length, Math.max(0, (deck ? deck.newPerDay : 20) - introducedToday));
+    const limit = deck ? deck.newPerDay : 20;
+    let newLeft = Math.min(fresh.length, Math.max(0, limit - introducedToday));
+    let freshOrdered = fresh, groupOf = null;
+    if (deck && deck.order === 'similar') {
+      ({ fresh: freshOrdered, newLeft, groupOf } = planSimilar(deckId, cards, st, today, limit, rank));
+    }
     // `due` in the returned summary includes learning cards (they come first).
-    return { due: [...learning, ...due], learning, reviews: due, soon, fresh, newLeft, states: st, total: cards.length };
+    return { due: [...learning, ...due], learning, reviews: due, soon, fresh: freshOrdered, newLeft, groupOf,
+      states: st, total: cards.length };
   }
 
   /**

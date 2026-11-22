@@ -53,7 +53,13 @@ separate storage. Connect both to sync them, or just use one.
 - **Scheduling uses FSRS-4.5** (the algorithm modern Anki uses), with 90% target retention, an Anki-style 4am day boundary, and a configurable new-cards-per-day limit.
   - "Again" on a card you've never gotten right brings it back in 1 minute; on a card you'd learned, in 5 minutes.
   - After an "Again", the card comes back with **the same photo**. Once you get it right, it goes back to fresh photos.
-  - Cards come in **random order** (reshuffled daily), or "as added" (a per-deck setting).
+  - Cards come in **random order** (reshuffled daily), "as added", or **similar together** (a per-deck setting).
+  - *Similar together* introduces lookalikes on the same day. Similarity comes from iNat's misidentification data
+    (how often each species was mistaken for the other, in the deck's place if it has one), counting only pairs
+    confused in *both* directions, so a default guess like "Mallard" doesn't pull every duck in. A card joins a group
+    only if it resembles every member. Nested cards never count as lookalikes, and cards with no lookalike in the
+    deck are introduced alone. Groups are always finished, and each day stays within 4 of the new-card limit when
+    the group sizes allow. The deck page shows which new cards will come together.
 - **Maps:**
   - Question side: where the photo was taken, shown within its state or province (country as fallback). Obscured locations appear as a dashed circle. This can be turned off per deck.
   - Answer side: the taxon's whole distribution (iNat's observation grid), plus iNat's range map when one exists.
@@ -72,6 +78,7 @@ separate storage. Connect both to sync them, or just use one.
 | `js/scheduler.js` | Replays the review log into card states and picks the next card. |
 | `js/inat.js` | iNat API client, throttled to about 1 request/sec as iNat requests. |
 | `js/filters.js` | Photo filters: deck + card combination, same-deck exclusions, iNat query params, summaries, annotation vocabulary. |
+| `js/similar.js` | Lookalike groups for the *Similar together* order (iNat similar_species, cached monthly). |
 | `js/photos.js` | Per-card photo pools (keyed by taxon + filters): sampling, caching, choosing unseen observations, image preloading. |
 | `js/maps.js` | Leaflet maps: observation location (question) and taxon distribution and range (answer). |
 | `js/modes.js` | Review-mode plugins (`self`, `typed`). |
