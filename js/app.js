@@ -931,7 +931,9 @@ function viewStudy(deckId) {
     stage.innerHTML = `
       <figure class="photo">
         <div class="photo-box"><img id="photo" alt="Photo to identify"></div>
-        <figcaption class="attrib">Photo ${esc(photo.attribution)} · via iNaturalist</figcaption>
+        <figcaption class="attrib">Photo ${esc(photo.attribution)} ·
+          <a target="_blank" rel="noopener" href="https://www.inaturalist.org/observations/${photo.obsId}"
+            title="Opens the observation on iNaturalist (shows its identification)">observation on iNaturalist ↗</a></figcaption>
       </figure>
       ${warnings.join('')}
       <div class="qrow ${withMap ? 'with-map' : ''}">

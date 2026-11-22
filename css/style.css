@@ -112,6 +112,7 @@ table.list { width: 100%; border-collapse: collapse; }
   justify-content: center; align-items: center; min-height: 240px; }
 .photo-box img { max-width: 100%; max-height: 64vh; display: block; }
 .attrib { font-size: .75rem; color: var(--muted); text-align: center; margin-top: 4px; }
+.attrib a { color: inherit; }
 .prompt { display: flex; justify-content: center; margin: 16px 0; }
 .typed { display: flex; gap: 8px; width: 100%; max-width: 620px; flex-wrap: wrap; }
 .typed input { flex: 1; min-width: 12em; width: auto; font-size: 1.05rem; }
